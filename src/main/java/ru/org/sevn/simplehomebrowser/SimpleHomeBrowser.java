@@ -31,7 +31,10 @@ import javafx.scene.web.WebView;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
+import java.awt.image.BufferedImage;
+import java.io.File;
 import java.io.IOException;
+import java.io.StringWriter;
 import java.io.UnsupportedEncodingException;
 import java.net.MalformedURLException;
 import java.net.URI;
@@ -54,8 +57,28 @@ import java.util.logging.Logger;
 import javafx.concurrent.Worker;
  
 import static javafx.concurrent.Worker.State.FAILED;
+import javafx.embed.swing.SwingFXUtils;
+import javafx.scene.Node;
+import javafx.scene.SnapshotParameters;
+import javafx.scene.image.ImageView;
+import javafx.scene.image.WritableImage;
+import javafx.scene.layout.BorderPane;
+import javafx.scene.web.PromptData;
+import javafx.scene.web.WebErrorEvent;
+import javafx.stage.FileChooser;
+import javafx.util.Callback;
+import javax.imageio.ImageIO;
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
 import org.json.JSONArray;
 import org.json.JSONObject;
+
+import netscape.javascript.JSObject;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.html.HTMLImageElement;
 
                         /*
                         http://docs.oracle.com/javase/8/javafx/api/javafx/scene/web/WebEngine.html
@@ -85,6 +108,9 @@ java.net.CookieHandler.setDefault(new java.net.CookieManager());
 public class SimpleHomeBrowser extends JFrame {
  
     private final JFXPanel jfxPanel = new JFXPanel();
+    private final JFXPanel jfxPanel1 = new JFXPanel();
+    private final ImageView imageView = new ImageView();
+    
     private WebEngine engine;
  
     private JPanel topBar;
@@ -95,6 +121,7 @@ public class SimpleHomeBrowser extends JFrame {
     private final JButton btnGo = new JButton("Go!");
     private final JButton btnHome = new JButton("Home"+SHK_HOME);
     private final JButton btnHistory = new JButton("History");
+    private final JButton btnRunJsFromControl = new JButton("runIt()");
     private final JButton btnX = new JButton("X"+SHK_X);
     private final JTextField txtURL = new JTextField();
     private final JProgressBar progressBar = new JProgressBar();
@@ -204,6 +231,10 @@ public class SimpleHomeBrowser extends JFrame {
         btnX.addActionListener(exitAction);
         btnHome.addActionListener(homeAction);
         btnHistory.addActionListener(openFromHistory);
+        btnRunJsFromControl.addActionListener((e) -> {
+            System.out.println("RunJsFromControl");
+            runJsFromControl();
+        });
         txtURL.addActionListener(al);
  
         progressBar.setPreferredSize(new Dimension(150, 18));
@@ -216,6 +247,7 @@ public class SimpleHomeBrowser extends JFrame {
         topBar.add(buttons, BorderLayout.EAST);
         buttons.add(btnGo);
         buttons.add(btnHistory);
+        buttons.add(btnRunJsFromControl);
         buttons.add(btnHome);
         buttons.add(btnX);
  
@@ -226,6 +258,7 @@ public class SimpleHomeBrowser extends JFrame {
  
         panel.add(topBar, BorderLayout.NORTH);
         panel.add(jfxPanel, BorderLayout.CENTER);
+        panel.add(jfxPanel1, BorderLayout.WEST);
         panel.add(statusBar, BorderLayout.SOUTH);
  
         getContentPane().add(panel);
@@ -293,6 +326,7 @@ public class SimpleHomeBrowser extends JFrame {
  
                 webView = new WebView();
                 engine = webView.getEngine();
+                engine.setJavaScriptEnabled(true);
                 //com.sun.webkit.LoadListenerClient
                 final WebPage page = Accessor.getPageFor(engine);
                 page.addLoadListenerClient(new LoadListenerClient() {
@@ -322,6 +356,33 @@ public class SimpleHomeBrowser extends JFrame {
                     }
                 });
  
+                webView.setContextMenuEnabled(true);
+                createContextMenu(webView);
+                webView.getEngine().setOnError(new EventHandler<WebErrorEvent>() {
+                    @Override
+                    public void handle(WebErrorEvent event) {
+                        System.err.println(""+event.getMessage());
+                    }
+                });
+                webView.getEngine().setOnAlert(new EventHandler<WebEvent<String>>() {
+                    @Override
+                    public void handle(WebEvent<String> arg0) {
+                        JOptionPane.showMessageDialog(null, arg0.getData(), "Message", JOptionPane.INFORMATION_MESSAGE);
+                    }
+                });
+                webView.getEngine().setConfirmHandler(new Callback<String, Boolean>() {
+                    public Boolean call(String msg) {
+                        int result = JOptionPane.showConfirmDialog(null, msg, "Message", JOptionPane.OK_CANCEL_OPTION, JOptionPane.INFORMATION_MESSAGE);
+                        boolean b = (result != 0);
+                        return !b;
+                    }
+                });
+                webView.getEngine().setPromptHandler(new Callback<PromptData, String>() {
+                    @Override
+                    public String call(PromptData param) {
+                        return (String)JOptionPane.showInputDialog(null, param.getMessage(), "Message", JOptionPane.INFORMATION_MESSAGE, null, null, param.getDefaultValue());
+                    }
+                });
                 engine.titleProperty().addListener(new ChangeListener<String>() {
                     @Override
                     public void changed(ObservableValue<? extends String> observable, String oldValue, final String newValue) {
@@ -329,7 +390,7 @@ public class SimpleHomeBrowser extends JFrame {
                             @Override
                             public void run() {
                                 SimpleHomeBrowser.this.setTitle(newValue);
-                                txtURL.setText(lastUrl);
+//                                txtURL.setText(lastUrl);
                             }
                         });
                     }
@@ -395,7 +456,12 @@ public class SimpleHomeBrowser extends JFrame {
                         });
  
                 engine.getLoadWorker().stateProperty().addListener((observable, oldValue, newValue) -> {
+                        System.out.println("-----"+newValue);
                     if (Worker.State.SUCCEEDED.equals(newValue)) {
+                        JSObject jsobj = (JSObject) engine.executeScript("window");
+                        jsobj.setMember("JavaFileLoader", new JavaFileLoader());
+                        engine.executeScript("JavaFileLoader.logIt('It works')");
+                        //captureView(jfxPanel);
 // engine.getLocation() DOESNT WORK PROPERLY !!!
 //                        SwingUtilities.invokeLater(new Runnable() {
 //                            @Override
@@ -406,6 +472,12 @@ public class SimpleHomeBrowser extends JFrame {
                     }
                 });                
                 jfxPanel.setScene(new Scene(webView));
+                imageView.setPreserveRatio(true);
+                imageView.setSmooth(true);
+                imageView.setCache(true);                
+                BorderPane borderpane = new BorderPane();
+                borderpane.setCenter(imageView);                
+                jfxPanel1.setScene(new Scene(borderpane));
             }
         });
     }
@@ -765,6 +837,130 @@ public class SimpleHomeBrowser extends JFrame {
         return u;
     }
 
+    private static final File outDir = new File("D:\\USERTEMP\\jfxout");
+    
+    private static String makeFileName(String ext) {
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmm_ssSSS_Z");
+        return "demo"+sdf.format(new Date())+ext;
+    }
+    
+    public static String toDocumentString(Document doc) {
+        try {
+            StringWriter sw = new StringWriter();
+            TransformerFactory tf = TransformerFactory.newInstance();
+            javax.xml.transform.Transformer transformer = tf.newTransformer();
+            transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no");
+            transformer.setOutputProperty(OutputKeys.METHOD, "xml");
+            transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+            transformer.setOutputProperty(OutputKeys.ENCODING, "UTF-8");
+
+            transformer.transform(new DOMSource(doc), new StreamResult(sw));
+            return sw.toString();
+        } catch (Exception ex) {
+            throw new RuntimeException("Error converting to String", ex);
+        }
+    }
+    
+    private void runJsFromControl() {
+        Platform.runLater(()->{
+            engine.executeScript("main()");
+        });
+    }
+    private void captureImage(String imageId, String fileName, String format) {
+        Element el = engine.getDocument().getElementById(imageId);
+        //Object el1 = engine.executeScript("document.getElementById('"+imageId+"')");
+        System.out.println("captureImage>"+el);
+        if (el instanceof HTMLImageElement) {
+            HTMLImageElement img = (HTMLImageElement)el;
+            System.out.println("img_src>"+img.getSrc());
+            javafx.scene.image.Image image = new javafx.scene.image.Image(img.getSrc());
+            imageView.setImage(image);
+            captureNode(imageView, fileName, format);
+        }
+        //com.sun.webkit.dom.HTMLImageElementImpl img = (com.sun.webkit.dom.HTMLImageElementImpl)el;
+    }
+    private void captureNode(Node node, String fileName, String format) {
+        if (!outDir.exists()) outDir.mkdirs();
+        
+        WritableImage image = node.snapshot(new SnapshotParameters(), null);
+        BufferedImage bi = SwingFXUtils.fromFXImage(image, null);        
+        bi.flush();
+        try {
+            if (fileName == null) {
+                fileName = makeFileName(".png");
+            }
+            if (format == null) {
+                format = "PNG";
+            }
+            ImageIO.write(bi, format, new File(outDir, fileName));
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        
+    }
+    private static void captureView(JFXPanel jfxPanel) {
+        if (!outDir.exists()) outDir.mkdirs();
+        
+        BufferedImage bi = new BufferedImage(jfxPanel.getWidth(), jfxPanel.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        Graphics graphics = bi.createGraphics();
+        jfxPanel.paint(graphics);
+        bi.flush();
+        try {
+            ImageIO.write(bi, "PNG", new File(outDir, makeFileName(".png")));
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        graphics.dispose();
+    }
+
+    public class JavaFileLoader {
+
+        public int captureImage(String imageId, String fileName, String format) {
+            SimpleHomeBrowser.this.captureImage(imageId, fileName, format);
+            return 0;
+        }
+        public int logIt(Object o) {
+            System.out.println(""+o);
+            return 0;
+        }
+    }
+    
+    private void createContextMenu(WebView webView) {
+//        ContextMenu contextMenu = new ContextMenu();
+//        MenuItem reload = new MenuItem("Reload");
+//        reload.setOnAction(e -> webView.getEngine().reload());
+//        MenuItem savePage = new MenuItem("Save Page");
+//        savePage.setOnAction(e -> System.out.println("Save page..."));
+//        MenuItem hideImages = new MenuItem("Hide Images");
+//        hideImages.setOnAction(e -> System.out.println("Hide Images..."));
+//        contextMenu.getItems().addAll(reload, savePage, hideImages);
+
+//        webView.setOnMousePressed(e -> {
+//            if (e.getButton() == MouseButton.MIDDLE.SECONDARY) {
+//                contextMenu.show(webView, e.getScreenX(), e.getScreenY());
+//            } else {
+//                contextMenu.hide();
+//            }
+//        });
+    }    
+
+    private void saveFile(javafx.stage.Window win, Node node){
+        if (node == null) return;
+        SnapshotParameters sp = new SnapshotParameters();
+        //sp.setFill(Color.TRANSPARENT);
+        FileChooser fc = new FileChooser();
+        fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("PNG", "*.png"));
+        fc.setTitle("Save into file");
+        File file = fc.showSaveDialog(win);
+        if (file != null) {
+            try {
+                ImageIO.write(SwingFXUtils.fromFXImage(node.snapshot(sp, null), null), "png", file);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
 }
+
 
 //TODO focus to webview
